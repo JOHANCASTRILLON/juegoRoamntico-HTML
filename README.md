@@ -1,4 +1,23 @@
-para ingresar debes entrar al link del HTML.
-se juega con las flechitas o awsd, al gusto.
-con space se quita la carta de la pantalla.
-para reiniciar debes entras de nuevo al link.
+# Para Mi Sofi ❤️
+
+Un pequeño juego/experiencia interactiva creada con HTML, CSS y JavaScript.
+
+## Jugar
+
+Puedes probarlo aquí:
+
+https://johancastrillon.github.io/juegoRoamntico-HTML/
+
+## Captura
+
+![Screenshot](screenshot.png)
+
+## Tecnologías
+
+- HTML
+- CSS
+- JavaScript
+
+## Autor
+
+Johan Castrillón
