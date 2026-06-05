@@ -1,0 +1,590 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a0a2e; overflow: hidden; font-family: 'Courier New', monospace; }
+  canvas { display: block; image-rendering: pixelated; }
+  #ui { position: absolute; top: 0; left: 0; width: 100%; pointer-events: none; }
+  #hud { padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+  #card-counter { color: #e8c4ff; font-size: 13px; font-weight: bold; text-shadow: 0 0 8px #9b59b6; }
+  #card-popup{
+    position:fixed;
+    top:50vh;
+    left:50vw;
+    transform:translate(-50%,-50%) scale(0);
+    width:500px;
+    max-width:85%;
+    background:linear-gradient(135deg,#2d0a4e,#5b21b6);
+    border:3px solid #c084fc;
+    border-radius:18px;
+    padding:30px;
+    text-align:center;
+    color:white;
+    transition:.3s;
+    box-shadow:0 0 60px rgba(192,132,252,.6);
+    backdrop-filter:blur(8px);
+    pointer-events:none;
+    z-index:9999;
+  }
+  #card-popup.show{
+    transform:translate(-50%,-50%) scale(1);
+  }
+  #card-popup .card-num { font-size:14px; color:#d8b4fe; margin-bottom:15px; }
+  #card-popup .card-msg { font-size:24px; line-height:1.7; color:white; font-weight:bold; text-shadow:0 0 10px rgba(255,255,255,.25); }
+  #card-popup .card-icon {
+    font-size: 32px;
+    margin-bottom: 10px;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  }
+  #controls-hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: #7b5ea7; font-size: 11px; text-align: center; }
+  #final-screen{
+    position:absolute;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%) scale(0);
+    width:420px;
+    max-width:90%;
+    background:linear-gradient(135deg,#2d0a4e,#4a1a7a);
+    border:3px solid #c084fc;
+    border-radius:16px;
+    padding:25px;
+    text-align:center;
+    color:white;
+    box-shadow:0 0 40px rgba(192,132,252,.5);
+    opacity:0;
+    transition:.4s;
+    z-index:100;
+  }
+  #final-screen.show { opacity: 1; pointer-events: all; transform: translate(-50%,-50%) scale(1); }
+  #final-screen h2 { font-size: 22px; color: #e8c4ff; margin-bottom: 16px; }
+  #final-screen p { font-size: 13px; line-height: 1.9; color: #d4b0ff; max-width: 320px; white-space: pre-line; }
+  #final-screen .hearts { font-size: 32px; margin: 16px 0; letter-spacing: 6px; }
+  #minimap { position: absolute; bottom: 30px; right: 10px; border: 1px solid #7b2fbf; background: #1a0a2e99; border-radius: 4px; }
+  #zone-label { position: absolute; bottom: 36px; left: 12px; color: #b39ddb; font-size: 11px; }
+
+#close-final{
+  margin-top:20px;
+  padding:10px 18px;
+  border:none;
+  border-radius:8px;
+  background:#c084fc;
+  color:white;
+  cursor:pointer;
+  font-weight:bold;
+}
+#close-final:hover{
+  transform:scale(1.05);
+}
+
+
+#card-popup.show::before{
+ content:'';
+ position:fixed;
+ inset:-5000px;
+ background:rgba(0,0,0,.35);
+ z-index:-1;
+}
+
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div id="hud">
+    <div id="card-counter">💗 Cartas: 0 / 48</div>
+    <div style="color:#7b5ea7;font-size:11px;">Para Mi Sofi · Cap. 2</div>
+  </div>
+  <div id="card-popup">
+    
+    <div class="card-num" id="popup-num">Carta #1</div>
+    <div class="card-msg" id="popup-msg"></div>
+  </div>
+  <canvas id="minimap" width="90" height="70"></canvas>
+  <div id="zone-label" id="zone-label"></div>
+  <div id="controls-hint">WASD o flechas · explora las 9 zonas y encuentra las 48 cartas 💗</div>
+  <div id="final-screen">
+    <div style="font-size:40px;">💗</div>
+    <h2>¡Lo lograste, Sofi!</h2>
+    <p id="final-msg"></p>
+    <button id="close-final">Cerrar</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const miniCanvas = document.getElementById('minimap');
+const mctx = miniCanvas.getContext('2d');
+
+let W = window.innerWidth, H = window.innerHeight;
+canvas.width = W; canvas.height = H;
+
+function resizeCanvas(){
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W;
+  canvas.height = H;
+}
+window.addEventListener('resize', resizeCanvas);
+
+const TILE = 16;
+const WW = 96, WH = 80; // world tiles
+
+// --- TILE TYPES ---
+// 0=grass  1=path  2=water  3=tree  4=decoration  5=flower
+
+const world = new Uint8Array(WW * WH);
+const cardMap = new Array(WW * WH).fill(-1);
+const collectedCards = new Set();
+
+function set(x,y,v){ if(x>=0&&x<WW&&y>=0&&y<WH) world[y*WW+x]=v; }
+function get(x,y){ if(x<0||x>=WW||y<0||y>=WH) return 0; return world[y*WW+x]; }
+function isBlocking(t){ return t===3||t===2; }
+
+// Zones — purely visual, no walls blocking
+const ZONES = [
+  { name:'Universidad',     x:1,  y:1,  w:28, h:26 },
+  { name:'Parque del Amor', x:33, y:1,  w:24, h:26 },
+  { name:'Postres Favoritos',   x:61, y:1,  w:33, h:26 },
+  { name:'Plaza Central',   x:1,  y:31, w:28, h:24 },
+  { name:'Jardín Secreto',  x:33, y:31, w:24, h:24 },
+  { name:'Casa de Sofi',    x:61, y:31, w:33, h:24 },
+  { name:'Bosque Morado',   x:1,  y:59, w:28, h:19 },
+  { name:'Lago Estrellado', x:33, y:59, w:24, h:19 },
+  { name:'Mirador Final',   x:61, y:59, w:33, h:19 },
+];
+
+const CARDS = [
+  {icon:'💗',msg:'Me encanta cómo tus ojos brillan cuando ríes.'},
+  {icon:'🌸',msg:'Desde el primer día en la universidad supe que eras especial.'},
+  {icon:'✨',msg:'Tu sonrisa es lo más bonito que he visto.'},
+  {icon:'🌙',msg:'Pienso en ti antes de dormir cada noche.'},
+  {icon:'🦋',msg:'Me hiciste mejor persona sin siquiera intentarlo.'},
+  {icon:'🌺',msg:'Cada momento contigo es mi favorito.'},
+  {icon:'💫',msg:'Tu risa es mi canción favorita del universo.'},
+  {icon:'🎀',msg:'La carta que te regalé fue el mejor riesgo que tomé.'},
+  {icon:'🌷',msg:'Las flores que te di eran pequeñas, tu amor es inmenso.'},
+  {icon:'💝',msg:'Me encantan estos 5 meses que llevamos juntos.'},
+  {icon:'🌟',msg:'Eres mi motivo favorito para llegar a la universidad.'},
+  {icon:'🎵',msg:'Hay canciones que ya son tuyas en mi cabeza.'},
+  {icon:'🍫',msg:'Ningún postre se compara con la dulzura que llevas contigo.'},
+  {icon:'🌈',msg:'Contigo hasta los días grises tienen color morado.'},
+  {icon:'💗',msg:'Eres mi persona favorita en todo el mundo.'},
+  {icon:'🌙',msg:'Me gustan los planes contigo, aunque sean pequeños.'},
+  {icon:'✨',msg:'Tu forma de hablar de lo que te gusta me enamora.'},
+  {icon:'🦋',msg:'Cuando te vi por primera vez ya quería conocerte.'},
+  {icon:'🌸',msg:'El detalle hecho a mano fue fácil, solo pensé en ti.'},
+  {icon:'🎀',msg:'Que hayas dicho sí fue el mejor día de estos meses.'},
+  {icon:'💫',msg:'Me encanta que seamos del mismo mundo raro.'},
+  {icon:'🌺',msg:'Tu color favorito ya es también el mío.'},
+  {icon:'🌟',msg:'Eres brillante y a veces no te das cuenta.'},
+  {icon:'💝',msg:'Me gustan tus manos, tu voz y tu corazón.'},
+  {icon:'🎵',msg:'Aprendí que el amor no tiene que ser complicado.'},
+  {icon:'☕',msg:'Quiero seguir haciendo recuerdos contigo siempre.'},
+  {icon:'🌷',msg:'Gracias por recibirme con ese sí que cambió todo.'},
+  {icon:'💗',msg:'Eres la razón por la que el morado me gusta tanto.'},
+  {icon:'🌈',msg:'Me encanta cuando me cuentas tus cosas, todas.'},
+  {icon:'✨',msg:'Tu forma de ver el mundo me parece mágica.'},
+  {icon:'🦋',msg:'Cada vez que te veo sigo sintiendo mariposas.'},
+  {icon:'🌸',msg:'Eres la aventura más bonita en la que me he metido.'},
+  {icon:'🎀',msg:'Me gusta imaginar los planes que vamos a hacer.'},
+  {icon:'💫',msg:'Tu presencia hace que todo sea mejor automáticamente.'},
+  {icon:'🌙',msg:'Ojalá puedas sentir todo lo que te quiero.'},
+  {icon:'🌺',msg:'No cambiaría nada de cómo empezó nuestra historia.'},
+  {icon:'💝',msg:'Eres exactamente la persona que quería a mi lado.'},
+  {icon:'🎵',msg:'Me encanta ser tuyo y que tú seas mía.'},
+  {icon:'🌟',msg:'Gracias por dejarme quererte así.'},
+  {icon:'💗',msg:'Eres mi morado favorito en este mundo.'},
+  {icon:'☕',msg:'Contigo el tiempo siempre pasa demasiado rápido.'},
+  {icon:'🌷',msg:'Me gustan tus pequeñas manías y todo lo que te hace tú.'},
+  {icon:'✨',msg:'Eres la mejor parte de mis días en la universidad.'},
+  {icon:'🦋',msg:'Gracias por elegirme a mí entre todo el universo.'},
+  {icon:'🌈',msg:'Tu amor es el regalo más bonito que me han dado.'},
+  {icon:'🎀',msg:'Ojalá siempre tengas razones para sonreír así.'},
+  {icon:'💫',msg:'Este juego es pequeño, lo que siento por ti es enorme.'},
+  {icon:'💗',msg:'Te amo, Sofi. Siempre.'},
+];
+
+const FINAL_MSG = `Encontraste razones por las que te amo, Sofi.\n\nCada una es real. Cada una la siento.\n\nDesde la carta, las flores y el detalle hecho a mano…\nhasta hoy, han sido los 5 meses más bonitos de mi vida.\n\nEres mi morado favorito, mi persona favorita, mi todo.\n\nGracias por decir que sí.\n\nCon todo mi amor,\nde tu chocolatito 💗`;
+
+// ---- World generation ----
+function buildWorld() {
+  world.fill(0); // everything walkable grass by default
+
+  // Horizontal paths (connecting rows of zones)
+  for(let x=0;x<WW;x++){
+    set(x,28,1); set(x,29,1); set(x,30,1);
+    set(x,56,1); set(x,57,1); set(x,58,1);
+  }
+  // Vertical paths (connecting columns of zones)
+  for(let y=0;y<WH;y++){
+    set(30,y,1); set(31,y,1); set(32,y,1);
+    set(58,y,1); set(59,y,1); set(60,y,1);
+  }
+
+  // --- Zone decorations (only trees/water as decoration, NOT blocking paths) ---
+
+  // Zona 0: Universidad — some desk decorations
+  for(let dx=0;dx<3;dx++) for(let dy=0;dy<4;dy++){
+    set(5+dx*7, 5+dy*5, 4);
+    set(6+dx*7, 5+dy*5, 4);
+  }
+
+  // Zona 1: Parque — flower clusters
+  const flowerSeeds = [[35,4],[40,8],[45,5],[37,14],[43,18],[50,12],[36,20],[48,22]];
+  flowerSeeds.forEach(([fx,fy])=>{
+    set(fx,fy,5); set(fx+1,fy,5); set(fx,fy+1,5);
+  });
+  // A few trees (not on paths)
+  [[34,3],[55,3],[34,24],[55,24]].forEach(([tx,ty])=>{ set(tx,ty,3); set(tx+1,ty,3); });
+
+  // Zona 2: Café — tables
+  for(let dx=0;dx<4;dx++) for(let dy=0;dy<3;dy++){
+    set(63+dx*7, 4+dy*6, 4);
+  }
+
+  // Zona 3: Plaza — fountain (water) in center, clear of paths
+  for(let fx=13;fx<=17;fx++) for(let fy=38;fy<=42;fy++) set(fx,fy,2);
+
+  // Zona 4: Jardín — lots of flowers
+  for(let i=0;i<18;i++){
+    set(34+(i%8)*2, 32+(Math.floor(i/8))*4+1, 5);
+  }
+
+  // Zona 5: Casa — a house shape (decorative only)
+  // outer walls purely decorative small building
+  for(let hx=65;hx<=88;hx++) set(hx,34,4);
+  for(let hx=65;hx<=88;hx++) set(hx,52,4);
+  for(let hy=34;hy<=52;hy++) set(65,hy,4);
+  for(let hy=34;hy<=52;hy++) set(88,hy,4);
+  // door opening (walkable)
+  set(76,52,0); set(77,52,0); set(76,34,0); set(77,34,0);
+  set(65,42,0); set(65,43,0); set(88,42,0); set(88,43,0);
+
+  // Zona 6: Bosque — dense trees but with clear paths through
+  for(let i=0;i<25;i++){
+    const tx2 = 2+(i*5)%24, ty2 = 60+(i*3)%16;
+    if(tx2>2&&tx2<26&&ty2>59&&ty2<77){
+      // don't block the main horizontal path area
+      set(tx2,ty2,3); set(tx2+1,ty2,3);
+    }
+  }
+
+  // Zona 7: Lago — water body
+  for(let lx=35;lx<=54;lx++) for(let ly=61;ly<=74;ly++){
+    const d = Math.hypot(lx-44.5, ly-67.5);
+    if(d<10) set(lx,ly,2);
+  }
+  // bridges over lake
+  for(let bx=43;bx<=46;bx++){ set(bx,61,1); set(bx,74,1); }
+  for(let by=61;by<=74;by++){ set(35,by,1); set(54,by,1); }
+
+  // Zona 8: Mirador — star flowers
+  for(let i=0;i<12;i++){
+    set(63+(i%6)*4, 61+(Math.floor(i/6))*5, 5);
+  }
+  // Special end platform
+  for(let ex=70;ex<=82;ex++) for(let ey=63;ey<=72;ey++) set(ex,ey,1);
+}
+
+function placeCards() {
+  let cardIdx = 0;
+  ZONES.forEach((z, zi) => {
+    const count = 48 / ZONES.length | 0; // ~5 per zone, last gets rest
+    const total = zi === ZONES.length-1 ? 48 - cardIdx : count + (zi < 48%ZONES.length ? 1 : 0);
+    let placed = 0, attempts = 0;
+    while(placed < total && attempts < 2000){
+      attempts++;
+      const cx = z.x + 1 + Math.floor(Math.random()*(z.w-3));
+      const cy = z.y + 1 + Math.floor(Math.random()*(z.h-3));
+      const t = get(cx,cy);
+      if(!isBlocking(t)){
+        const idx = cy*WW+cx;
+        if(cardMap[idx]===-1){
+          cardMap[idx] = cardIdx;
+          cardIdx++;
+          placed++;
+        }
+      }
+    }
+  });
+}
+
+buildWorld();
+placeCards();
+
+// ---- Player ----
+const player = { x: 10*TILE+8, y: 10*TILE+8, animT:0, dir:1 };
+const keys = {};
+document.addEventListener('keydown', e=>{ keys[e.key]=true; e.preventDefault(); });
+document.addEventListener('keyup',  e=>{ keys[e.key]=false; });
+document.addEventListener('keydown', e=>{
+  if(
+    document.getElementById('card-popup').classList.contains('show') &&
+    (e.key === ' ' || e.key === 'Enter' || e.key === 'Escape')
+  ){
+    document.getElementById('card-popup').classList.remove('show');
+    popupTimer = 0;
+  }
+});
+
+
+let camX=0, camY=0;
+let popupTimer=0;
+let gameWon=false;
+let tick=0;
+let currentZoneName='';
+
+// Tile visuals
+function tileColor(t, x, y){
+  const c = (x+y)%2;
+  switch(t){
+    case 0: return c ? '#2d1b4e' : '#351f58';
+    case 1: return c ? '#5a3d7a' : '#6b4d8a';
+    case 2: return c ? '#18103a' : '#20154a';
+    case 3: return '#3d2560';
+    case 4: return '#5a3580';
+    case 5: return '#c084fc';
+    default: return '#2d1b4e';
+  }
+}
+
+function showCard(idx){
+  const card = CARDS[idx];
+
+  document.getElementById('popup-num').textContent =
+      `Carta #${idx+1} de 48`;
+
+  document.getElementById('popup-msg').textContent =
+      card.msg;
+
+  document.getElementById('card-popup').classList.add('show');
+
+  document.getElementById('card-counter').textContent =
+      `Cartas: ${collectedCards.size} / 48`;
+
+  popupTimer = 260;
+}
+
+function update(){
+  if(gameWon) return;
+  const speed = 2;
+  let dx=0, dy=0;
+  if(keys['ArrowLeft']||keys['a']||keys['A'])  { dx=-speed; player.dir=2; }
+  if(keys['ArrowRight']||keys['d']||keys['D']) { dx= speed; player.dir=0; }
+  if(keys['ArrowUp']||keys['w']||keys['W'])    { dy=-speed; player.dir=3; }
+  if(keys['ArrowDown']||keys['s']||keys['S'])  { dy= speed; player.dir=1; }
+  if(dx||dy) player.animT++;
+
+  // Try move X
+  const pw=6;
+  const nx = player.x + dx;
+  const tl = get(Math.floor((nx-pw)/TILE), Math.floor(player.y/TILE));
+  const tr = get(Math.floor((nx+pw)/TILE), Math.floor(player.y/TILE));
+  if(!isBlocking(tl) && !isBlocking(tr)) player.x = nx;
+
+  // Try move Y
+  const ny = player.y + dy;
+  const tt = get(Math.floor(player.x/TILE), Math.floor((ny-pw)/TILE));
+  const tb = get(Math.floor(player.x/TILE), Math.floor((ny+pw)/TILE));
+  if(!isBlocking(tt) && !isBlocking(tb)) player.y = ny;
+
+  // Clamp to world
+  player.x = Math.max(8, Math.min(WW*TILE-8, player.x));
+  player.y = Math.max(8, Math.min(WH*TILE-8, player.y));
+
+  // Camera
+  camX = Math.round(Math.max(0, Math.min(WW*TILE-W, player.x - W/2)));
+  camY = Math.round(Math.max(0, Math.min(WH*TILE-H, player.y - H/2)));
+
+  // Card pickup
+  const ptx = Math.floor(player.x/TILE), pty = Math.floor(player.y/TILE);
+  const pidx = pty*WW+ptx;
+  if(cardMap[pidx]!==-1 && !collectedCards.has(cardMap[pidx])){
+    const ci = cardMap[pidx];
+    collectedCards.add(ci);
+    cardMap[pidx] = -1;
+    showCard(ci);
+    if(collectedCards.size===48){
+      setTimeout(()=>{
+        document.getElementById('final-msg').textContent = FINAL_MSG;
+        document.getElementById('final-screen').classList.add('show');
+        gameWon=true;
+      }, 2200);
+    }
+  }
+
+  // Popup timer
+  // El popup se cierra manualmente con una tecla
+
+  // Zone label
+  const px2=Math.floor(player.x/TILE), py2=Math.floor(player.y/TILE);
+  currentZoneName='';
+  ZONES.forEach(z=>{ if(px2>=z.x&&px2<z.x+z.w&&py2>=z.y&&py2<z.y+z.h) currentZoneName=z.name; });
+  const zl = document.getElementById('zone-label');
+  if(zl) zl.textContent = currentZoneName ? '📍 '+currentZoneName : '';
+}
+
+function drawPlayer(sx, sy){
+  const bob = 0;
+  const leg = Math.floor(player.animT/6)%2;
+  // shadow
+  ctx.fillStyle='#00000033';
+  ctx.fillRect(sx-5,sy+6,10,3);
+  // legs
+  ctx.fillStyle='#7c3aed';
+  if(leg===0){ ctx.fillRect(sx-3,sy+1,3,5); ctx.fillRect(sx,sy+3,3,5); }
+  else        { ctx.fillRect(sx-3,sy+3,3,5); ctx.fillRect(sx,sy+1,3,5); }
+  // body
+  ctx.fillStyle='#e879f9';
+  ctx.fillRect(sx-4,sy-5,8,7);
+  // head
+  ctx.fillStyle='#fde68a';
+  ctx.fillRect(sx-3,sy-11,6,7);
+  // hair
+  ctx.fillStyle='#a855f7';
+  ctx.fillRect(sx-3,sy-13,6,4);
+  ctx.fillRect(sx-4,sy-12,2,5);
+  // eyes
+  ctx.fillStyle='#1a0a2e';
+  ctx.fillRect(sx-2,sy-9,1,1);
+  ctx.fillRect(sx+1,sy-9,1,1);
+}
+
+function drawCardSprite(sx, sy){
+  const bob = Math.sin(tick*0.07)*2;
+  const alpha = 0.6+Math.sin(tick*0.1)*0.4;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle='#9333ea';
+  ctx.fillRect(sx-6, sy-6+bob, 12, 14);
+  ctx.fillStyle='#f3e5ff';
+  ctx.fillRect(sx-5, sy-5+bob, 10, 12);
+  ctx.fillStyle='#c084fc';
+  ctx.fillRect(sx-4, sy-4+bob, 8, 2);
+  ctx.fillRect(sx-4, sy-1+bob, 8, 1);
+  ctx.fillRect(sx-4, sy+1+bob, 5, 1);
+  ctx.restore();
+}
+
+function render(){
+  ctx.fillStyle='#1a0a2e';
+  ctx.fillRect(0,0,W,H);
+
+  const tx0=Math.floor(camX/TILE)-1, ty0=Math.floor(camY/TILE)-1;
+  const tx1=tx0+Math.ceil(W/TILE)+3, ty1=ty0+Math.ceil(H/TILE)+3;
+
+  // tiles
+  for(let ty=ty0;ty<ty1;ty++) for(let tx=tx0;tx<tx1;tx++){
+    const t=get(tx,ty);
+    const sx=tx*TILE-camX, sy=ty*TILE-camY;
+    ctx.fillStyle=tileColor(t,tx,ty);
+    ctx.fillRect(sx,sy,TILE,TILE);
+    // water shimmer
+    if(t===2&&(tx+ty+Math.floor(tick/12))%3===0){
+      ctx.fillStyle='#ffffff08';
+      ctx.fillRect(sx,sy,TILE,4);
+    }
+    // flower dot
+    if(t===5){
+      ctx.fillStyle='#e879f9';
+      ctx.fillRect(sx+4,sy+4,8,8);
+      ctx.fillStyle='#fcd34d';
+      ctx.fillRect(sx+6,sy+6,4,4);
+    }
+    // tree top
+    if(t===3){
+      ctx.fillStyle='#6d28d9';
+      ctx.fillRect(sx+1,sy,14,10);
+      ctx.fillStyle='#7c3aed';
+      ctx.fillRect(sx+3,sy-3,10,6);
+    }
+  }
+
+  // Zone border hints (subtle glow lines)
+  ctx.save();
+  ctx.globalAlpha=0.12;
+  ctx.strokeStyle='#c084fc';
+  ctx.lineWidth=1;
+  ZONES.forEach(z=>{
+    ctx.strokeRect(z.x*TILE-camX, z.y*TILE-camY, z.w*TILE, z.h*TILE);
+  });
+  ctx.restore();
+
+  // Zone name overlay
+  ctx.save();
+  ctx.globalAlpha=0.18;
+  ctx.fillStyle='#e8c4ff';
+  ctx.font='bold 10px Courier New';
+  ZONES.forEach(z=>{
+    const sx=z.x*TILE+4-camX, sy=z.y*TILE+14-camY;
+    ctx.fillText(z.name,sx,sy);
+  });
+  ctx.restore();
+
+  // Cards
+  for(let ty=ty0;ty<ty1;ty++) for(let tx=tx0;tx<tx1;tx++){
+    const idx=ty*WW+tx;
+    if(cardMap[idx]!==-1){
+      drawCardSprite(tx*TILE+8-camX, ty*TILE+8-camY);
+    }
+  }
+
+  // Player
+  drawPlayer(player.x-camX, player.y-camY);
+
+  // Sparse stars
+  ctx.save();
+  ctx.globalAlpha=0.2;
+  ctx.fillStyle='#fcd34d';
+  for(let i=0;i<20;i++){
+    const sx=((i*173+tick*0.4)%W);
+    const sy=((i*113+tick*0.15)%H);
+    ctx.fillRect(sx,sy,1,1);
+  }
+  ctx.restore();
+
+  // Minimap
+  const mw=90, mh=70;
+  const msx=mw/WW, msy=mh/WH;
+  mctx.fillStyle='#100820';
+  mctx.fillRect(0,0,mw,mh);
+  // zones
+  ZONES.forEach(z=>{
+    mctx.fillStyle='#3d2460';
+    mctx.fillRect(z.x*msx,z.y*msy,z.w*msx,z.h*msy);
+  });
+  // paths
+  mctx.fillStyle='#6b4d8a';
+  mctx.fillRect(30*msx,0,3*msx,mh);
+  mctx.fillRect(58*msx,0,3*msx,mh);
+  mctx.fillRect(0,28*msy,mw,3*msy);
+  mctx.fillRect(0,56*msy,mw,3*msy);
+  // remaining cards
+  mctx.fillStyle='#f3e5ff';
+  for(let i=0;i<WW*WH;i++){
+    if(cardMap[i]!==-1){
+      mctx.fillRect((i%WW)*msx,(Math.floor(i/WW))*msy,2,2);
+    }
+  }
+  // player dot
+  mctx.fillStyle='#f9a8d4';
+  mctx.fillRect(player.x/TILE*msx-2, player.y/TILE*msy-2, 4, 4);
+}
+
+function loop(){
+  update();
+  render();
+  tick++;
+  requestAnimationFrame(loop);
+}
+loop();
+
+document.getElementById('close-final').addEventListener('click',()=>{
+  document.getElementById('final-screen').classList.remove('show');
+});
+</script>
+</body>
+</html>
