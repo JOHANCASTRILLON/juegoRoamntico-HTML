@@ -10,7 +10,7 @@ https://johancastrillon.github.io/juegoRoamntico-HTML/
 
 ## Captura
 
-![Screenshot](<img width="1919" height="833" alt="screenshot png" src="https://github.com/user-attachments/assets/a620e68a-7f3b-41c3-a62a-af2896f157ff" />
+![Screenshot](<img width="1919" height="833" alt="screenshot png" src="https://github.com/user-attachments/assets/918e0aff-deaa-4fb0-9885-587610e1eae9" />
 )
 
 ## Tecnologías
